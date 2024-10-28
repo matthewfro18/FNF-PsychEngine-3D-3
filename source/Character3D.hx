@@ -18,7 +18,7 @@ import flixel.graphics.frames.FlxAtlasFrames;
 
 using StringTools;
 
-class Character3D extends objects.Character.hx
+class Character3D extends objects.Character
 {
 	public var animOffsets:Map<String, Array<Float>> = new Map<String, Array<Float>>();
 	public var debugMode:Bool = false;
