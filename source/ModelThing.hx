@@ -1,16 +1,14 @@
 package;
 
-import away3d.animators.nodes.SkeletonClipNode;
-import away3d.animators.data.Skeleton;
-import away3d.animators.transitions.CrossfadeTransition;
-import away3d.tools.commands.Explode;
-import away3d.animators.nodes.VertexClipNode;
-import away3d.tools.utils.Bounds;
-import flixel.FlxSprite;
-import flixel.graphics.FlxGraphic;
+import away3d.textures.ATFTexture;
 import away3d.animators.*;
+import away3d.animators.data.Skeleton;
+import away3d.animators.nodes.SkeletonClipNode;
+import away3d.animators.nodes.VertexClipNode;
+import away3d.animators.transitions.CrossfadeTransition;
 import away3d.containers.*;
 import away3d.controllers.*;
+import away3d.core.base.Geometry;
 import away3d.debug.*;
 import away3d.entities.*;
 import away3d.events.*;
@@ -22,47 +20,54 @@ import away3d.materials.*;
 import away3d.materials.lightpickers.*;
 import away3d.materials.methods.*;
 import away3d.primitives.*;
+import away3d.textures.BitmapCubeTexture;
+import away3d.textures.BitmapTexture;
+import away3d.tools.commands.Explode;
+import away3d.tools.utils.Bounds;
 import away3d.utils.Cast;
+import flixel.FlxG;
+import flixel.FlxSprite;
+import flixel.graphics.FlxGraphic;
+import openfl.Assets;
+import openfl.Vector;
 import openfl.display.*;
 import openfl.events.*;
 import openfl.filters.*;
 import openfl.geom.*;
+import openfl.net.URLRequest;
+import openfl.system.System;
 import openfl.text.*;
 import openfl.ui.*;
 import openfl.utils.ByteArray;
-import openfl.Assets;
-import openfl.Vector;
+import sys.FileSystem;
 
 class ModelThing
 {
-	private var modelBytes:ByteArray;
-	private var modelMaterial:TextureMaterial;
+	public var modelMaterial:TextureMaterial;
 
 	public var mesh:Mesh;
 
 	private var scale:Float;
 
-	// DD: vertex animations (MD2)
-	public var animationSet:VertexAnimationSet;
-
-	private var vertexAnimator:VertexAnimator;
-
-	// DD: Skeleton animations (MD5/AWD)
 	private var skeletonAnimator:SkeletonAnimator;
-	private var animationSetSkeleton:SkeletonAnimationSet;
+
+	public var animationSetSkeleton:SkeletonAnimationSet;
+
 	private var stateTransition:CrossfadeTransition;
 	private var skeleton:Skeleton;
 	private var animationMap:Map<String, ByteArray>;
 
 	public var modelType:String;
+	public var modelName:String;
 
 	public var modelView:ModelView;
 
 	public var fullyLoaded:Bool = false;
-
-	private var animSpeed:Map<String, Float>;
+	public var animSpeed:Map<String, Float>;
+	public var noLoopList:Array<String>;
 
 	public var currentAnim:String = "";
+	public var currentTime(get, never):Int;
 
 	public var initYaw:Float;
 	public var initPitch:Float;
@@ -72,215 +77,157 @@ class ModelThing
 	public var yOffset:Float = 0;
 	public var zOffset:Float = 0;
 
-	public var noLoopList:Array<String>;
+	var nodeCount:Int = 0;
+	var nodesProcessed:Int = 0;
 
-	public function new(type:String, fileName:String, _modelView:ModelView, _scale:Float = 1, _animSpeed:Map<String, Float> = null, _initYaw:Float = 0,
-			_initPitch:Float = 0, _initRoll:Float = 0, alpha:Float = 1.0, _initX:Float = 0, _initY:Float = 0, _initZ:Float = 0, list:Array<String>,
-			md5Anims:Map<String, String>)
+	var flipSingAnims:Bool = false;
+
+	public var bitmapTexture:BitmapTexture;
+
+	var atfBytes:ByteArray;
+	var atfTex:ATFTexture;
+
+	var geos:Map<String, Geometry> = [];
+
+	public function new(view:ModelView, modelName:String, modelType:String, animSpeed:Map<String, Float>, noLoopList:Array<String>, modelScale:Float,
+			initYaw:Float, initPitch:Float, initRoll:Float, xOffset:Float, yOffset:Float, zOffset:Float, flipSingAnims:Bool, antialiasing:Bool,
+			atf:Bool = false, ambient:Float = 0, specular:Float = 0, light:Bool = false, jointsPerVertex:Int = 4)
 	{
-		modelType = type;
+		this.modelType = modelType;
+		this.animSpeed = animSpeed;
+		this.noLoopList = noLoopList;
+		this.scale = modelScale;
+		this.initYaw = initYaw;
+		this.initPitch = initPitch;
+		this.initRoll = initRoll;
+		this.xOffset = xOffset;
+		this.yOffset = yOffset;
+		this.zOffset = zOffset;
+		this.flipSingAnims = flipSingAnims;
+		this.modelName = modelName;
 
-		switch (modelType)
+		if (!Assets.exists('assets/models/' + modelName + '/' + modelName + '.awd'))
 		{
-			case 'md2':
-				if (!Assets.exists('assets/models/' + fileName + '/' + fileName + '.md2'))
-				{
-					trace("ERROR: MODEL OF NAME '" + fileName + ".md2' CAN'T BE FOUND!");
-					return;
-				}
-
-				modelBytes = Assets.getBytes('assets/models/' + fileName + '/' + fileName + '.md2');
-				Asset3DLibrary.loadData(modelBytes, null, null, new MD2Parser());
-				Asset3DLibrary.addEventListener(Asset3DEvent.ASSET_COMPLETE, onAssetComplete);
-				Asset3DLibrary.addEventListener(LoaderEvent.RESOURCE_COMPLETE, onResourceComplete);
-
-				if (!Assets.exists('assets/models/' + fileName + '/' + fileName + '.png'))
-				{
-					trace("ERROR: TEXTURE OF NAME '" + fileName + "'.png CAN'T BE FOUND!");
-					return;
-				}
-				modelMaterial = new TextureMaterial(Cast.bitmapTexture('assets/models/' + fileName + '/' + fileName + '.png'));
-
-			case 'md5':
-				if (!Assets.exists('assets/models/' + fileName + '/' + fileName + '.md5mesh'))
-				{
-					trace("ERROR: MODEL OF NAME '" + fileName + ".md5mesh' CAN'T BE FOUND!");
-					return;
-				}
-				stateTransition = new CrossfadeTransition(0.15);
-				modelBytes = Assets.getBytes('assets/models/' + fileName + '/' + fileName + '.md5mesh');
-				animationMap = new Map<String, ByteArray>();
-				for (animName in md5Anims.keys())
-				{
-					if (!Assets.exists('assets/models/' + fileName + '/' + md5Anims[animName] + '.md5anim'))
-					{
-						trace("ERROR: MD5 ANIMATION OF NAME '" + md5Anims[animName] + ".md5anim' CAN'T BE FOUND!");
-						continue;
-					}
-					animationMap[animName] = Assets.getBytes('assets/models/' + fileName + '/' + md5Anims[animName] + '.md5anim');
-				}
-
-				Asset3DLibrary.addEventListener(Asset3DEvent.ASSET_COMPLETE, onAssetCompleteMD5);
-				Asset3DLibrary.addEventListener(LoaderEvent.RESOURCE_COMPLETE, onResourceCompleteMD5);
-				Asset3DLibrary.loadData(modelBytes, null, null, new MD5MeshParser());
-
-				modelMaterial = new TextureMaterial(Cast.bitmapTexture('assets/models/' + fileName + '/' + fileName + '.png'));
-
-			case 'awd':
-				if (!Assets.exists('assets/models/' + fileName + '/' + fileName + '.awd'))
-				{
-					trace("ERROR: MODEL OF NAME '" + fileName + ".awd' CAN'T BE FOUND!");
-					return;
-				}
-				stateTransition = new CrossfadeTransition(0.15);
-				modelBytes = Assets.getBytes('assets/models/' + fileName + '/' + fileName + '.awd');
-
-				Asset3DLibrary.enableParser(AWDParser);
-				Asset3DLibrary.addEventListener(Asset3DEvent.ASSET_COMPLETE, onAssetCompleteAWD);
-				Asset3DLibrary.addEventListener(LoaderEvent.RESOURCE_COMPLETE, onResourceCompleteAWD);
-				Asset3DLibrary.loadData(modelBytes);
-
-				if (!Assets.exists('assets/models/' + fileName + '/' + fileName + '.png'))
-				{
-					trace("ERROR: TEXTURE OF NAME '" + fileName + "'.png CAN'T BE FOUND!");
-					return;
-				}
-				modelMaterial = new TextureMaterial(Cast.bitmapTexture('assets/models/' + fileName + '/' + fileName + '.png'));
+			trace("ERROR: MODEL OF NAME '" + modelName + ".awd' CAN'T BE FOUND!");
+			return;
 		}
+		animationSetSkeleton = new SkeletonAnimationSet(jointsPerVertex);
+		stateTransition = new CrossfadeTransition(0.1);
 
-		modelView = _modelView;
-
-		modelMaterial.lightPicker = modelView.lightPicker;
-		modelMaterial.gloss = 30;
-		modelMaterial.specularMethod = new CelSpecularMethod();
-		modelMaterial.ambient = 1;
-		// modelMaterial.shadowMethod = modelView.shadowMapMethod;
-		modelMaterial.alpha = alpha;
-
-		scale = _scale;
-		if (_animSpeed == null)
-			animSpeed = ["default" => 1.0];
-		else
-			animSpeed = _animSpeed;
-		initYaw = _initYaw;
-		initPitch = _initPitch;
-		initRoll = _initRoll;
-		xOffset = _initX;
-		yOffset = _initY;
-		zOffset = _initZ;
-		noLoopList = list;
+		modelView = view;
 		modelView.cameraController.panAngle = 90;
 		modelView.cameraController.tiltAngle = 0;
-	}
 
-	private function onAssetComplete(event:Asset3DEvent):Void
-	{
-		if (event.asset.assetType == Asset3DType.MESH)
-		{
-			mesh = cast(event.asset, Mesh);
-			mesh.scaleX = scale;
-			mesh.scaleY = scale;
-			mesh.scaleZ = scale;
-			mesh.yaw(initYaw);
-			mesh.pitch(initPitch);
-			mesh.roll(initRoll);
-		}
-		else if (event.asset.assetType == Asset3DType.ANIMATION_NODE)
-		{
-			var node:VertexClipNode = cast(event.asset, VertexClipNode);
-			if (noLoopList.contains(node.name))
-				node.looping = false;
-		}
-		else if (event.asset.assetType == Asset3DType.ANIMATION_SET)
-		{
-			animationSet = cast(event.asset, VertexAnimationSet);
-		}
-	}
+		Asset3DLibrary.enableParser(AWDParser);
+		Asset3DLibrary.addEventListener(Asset3DEvent.ASSET_COMPLETE, onAssetCompleteAWD);
+		Asset3DLibrary.addEventListener(LoaderEvent.RESOURCE_COMPLETE, onResourceCompleteAWD);
+		// Asset3DLibrary.loadData(modelBytes);
+		LoadingCount.expand();
+		Asset3DLibrary.load(new URLRequest('assets/models/' + modelName + '/' + modelName + '.awd'));
 
-	private function onResourceComplete(event:LoaderEvent):Void
-	{
-		vertexAnimator = new VertexAnimator(animationSet);
-		// vertexAnimator.playbackSpeed = animSpeed["default"];
-		mesh.animator = vertexAnimator;
+		if (atf)
+		{
+			if (!Assets.exists('assets/models/' + modelName + '/' + modelName + '.atf'))
+			{
+				trace("ERROR: TEXTURE OF NAME '" + modelName + "'.atf CAN'T BE FOUND!");
+				return;
+			}
+			atfBytes = ByteArray.fromFile('assets/models/' + modelName + '/' + modelName + '.atf');
+			atfTex = new ATFTexture(atfBytes);
+			modelMaterial = new TextureMaterial(atfTex);
+		}
+		else
+		{
+			if (!Assets.exists('assets/models/' + modelName + '/' + modelName + '.png'))
+			{
+				trace("ERROR: TEXTURE OF NAME '" + modelName + "'.png CAN'T BE FOUND!");
+				return;
+			}
+			bitmapTexture = Cast.bitmapTexture('assets/models/' + modelName + '/' + modelName + '.png');
+			modelMaterial = new TextureMaterial(bitmapTexture, antialiasing);
+		}
 
-		render(xOffset, yOffset, zOffset);
-	}
-
-	private function onAssetCompleteMD5(event:Asset3DEvent):Void
-	{
-		if (event.asset.assetType == Asset3DType.ANIMATION_NODE)
+		if (light)
 		{
-			var node:SkeletonClipNode = cast(event.asset, SkeletonClipNode);
-			var name:String = event.asset.assetNamespace;
-			node.name = name;
-			animationSetSkeleton.addAnimation(node);
-			if (noLoopList.contains(node.name))
-				node.looping = false;
+			modelMaterial.lightPicker = modelView.lightPicker;
+			modelMaterial.shadowMethod = modelView.shadowMapMethod;
 		}
-		else if (event.asset.assetType == Asset3DType.ANIMATION_SET)
-		{
-			animationSetSkeleton = cast(event.asset, SkeletonAnimationSet);
-			skeletonAnimator = new SkeletonAnimator(animationSetSkeleton, skeleton);
-			for (name in animationMap.keys())
-				Asset3DLibrary.loadData(animationMap[name], null, name, new MD5AnimParser());
-		}
-		else if (event.asset.assetType == Asset3DType.SKELETON)
-		{
-			skeleton = cast(event.asset, Skeleton);
-		}
-		else if (event.asset.assetType == Asset3DType.MESH)
-		{
-			mesh = cast(event.asset, Mesh);
-			mesh.material = modelMaterial;
-			// mesh.castsShadows = true;
-			mesh.scaleX = scale;
-			mesh.scaleY = scale;
-			mesh.scaleZ = scale;
-			mesh.yaw(initYaw);
-			mesh.pitch(initPitch);
-			mesh.roll(initRoll);
-		}
-	}
-
-	private function onResourceCompleteMD5(event:LoaderEvent):Void
-	{
-		mesh.animator = skeletonAnimator;
-		render(xOffset, yOffset, zOffset);
+		modelMaterial.gloss = 30;
+		modelMaterial.alpha = 1.0;
+		modelMaterial.ambient = ambient;
+		modelMaterial.specular = specular;
 	}
 
 	private function onAssetCompleteAWD(event:Asset3DEvent):Void
 	{
 		if (event.asset.assetType == Asset3DType.SKELETON)
 		{
-			skeleton = cast(event.asset, Skeleton);
-			animationSetSkeleton = new SkeletonAnimationSet();
-			skeletonAnimator = new SkeletonAnimator(animationSetSkeleton, cast(event.asset, Skeleton), true);
+			trace("SKELLY");
+			if (StringTools.startsWith(event.asset.name, modelName + "_"))
+			{
+				skeleton = cast(event.asset, Skeleton);
+				System.gc();
+			}
 		}
 		else if (event.asset.assetType == Asset3DType.ANIMATION_NODE)
 		{
-			var node:SkeletonClipNode = cast(event.asset, SkeletonClipNode);
-			animationSetSkeleton.addAnimation(node);
-			if (noLoopList.contains(node.name))
-				node.looping = false;
+			if (StringTools.startsWith(event.asset.name, modelName + "_"))
+			{
+				var node:SkeletonClipNode = cast(event.asset, SkeletonClipNode);
+				trace("NODE: " + node.name);
+				node.name = StringTools.replace(node.name, modelName + "_", "");
+				trace(node.name);
+				animationSetSkeleton.addAnimation(node);
+				if (noLoopList.contains(node.name))
+					node.looping = false;
+				System.gc();
+			}
 		}
 		else if (event.asset.assetType == Asset3DType.MESH)
 		{
-			mesh = cast(event.asset, Mesh);
-			mesh.material = modelMaterial;
-			// mesh.castsShadows = true;
-			mesh.scaleX = scale;
-			mesh.scaleY = scale;
-			mesh.scaleZ = scale;
-			mesh.yaw(initYaw);
-			mesh.pitch(initPitch);
-			mesh.roll(initRoll);
+			if (StringTools.startsWith(event.asset.name, modelName + "_"))
+			{
+				mesh = cast(event.asset, Mesh);
+				trace("MESH: " + mesh.name);
+				mesh.material = modelMaterial;
+				mesh.castsShadows = true;
+				mesh.scaleX = scale;
+				mesh.scaleY = scale;
+				mesh.scaleZ = scale;
+				mesh.yaw(initYaw);
+				mesh.pitch(initPitch);
+				mesh.roll(initRoll);
+				System.gc();
+			}
+		}
+		else if (event.asset.assetType == Asset3DType.GEOMETRY)
+		{
+			if (StringTools.startsWith(event.asset.name, modelName + "_"))
+			{
+				var geo = cast(event.asset, Geometry);
+				trace("GEO: " + geo.name);
+				geo.name = StringTools.replace(geo.name, modelName + "_", "");
+				geos.set(geo.name, geo);
+				System.gc();
+			}
 		}
 	}
 
 	private function onResourceCompleteAWD(event:LoaderEvent):Void
 	{
-		mesh.animator = skeletonAnimator;
-		render(xOffset, yOffset, zOffset);
+		if (StringTools.endsWith(event.url, modelName + ".awd"))
+		{
+			trace("DONE COMPLETE");
+			if (skeleton != null)
+			{
+				skeletonAnimator = new SkeletonAnimator(animationSetSkeleton, skeleton);
+				mesh.animator = skeletonAnimator;
+			}
+			render(xOffset, yOffset, zOffset);
+			begoneEventListeners();
+			System.gc();
+			LoadingCount.increment();
+		}
 	}
 
 	public function render(xPos:Float = 0, yPos:Float = 0, zPos:Float = 0):Void
@@ -288,81 +235,77 @@ class ModelThing
 		mesh.y = yPos;
 		mesh.x = xPos;
 		mesh.z = zPos;
-		if (modelType == 'md2')
-		{
-			mesh.castsShadows = false;
-			mesh.material = modelMaterial;
-		}
 		modelView.addModel(mesh);
-		modelView.addedModels.push(this);
 		fullyLoaded = true;
-		playAnim("idle");
+
+		if (flipSingAnims)
+		{
+			var lefts = ['singLEFT', 'singLEFTmiss', 'singLEFTEnd', 'singLEFTmissEnd'];
+			var rights = ['singRIGHT', 'singRIGHTmiss', 'singRIGHTEnd', 'singRIGHTmissEnd'];
+			for (i in 0...rights.length)
+			{
+				if (animationSetSkeleton.hasAnimation(rights[i]) && animationSetSkeleton.hasAnimation(lefts[i]))
+				{
+					var right = animationSetSkeleton.getAnimation(rights[i]);
+					var left = animationSetSkeleton.getAnimation(lefts[i]);
+					@:privateAccess
+					animationSetSkeleton._animationDictionary[rights[i]] = left;
+					@:privateAccess
+					animationSetSkeleton._animationDictionary[lefts[i]] = right;
+				}
+			}
+		}
+
+		if (animationSetSkeleton.hasAnimation('idleEnd'))
+			playAnim("idleEnd");
+		else if (animationSetSkeleton.hasAnimation('idle'))
+			playAnim('idle');
+		else if (animationSetSkeleton.hasAnimation('danceRIGHT'))
+			playAnim('danceRIGHT');
 	}
 
-	public function playAnim(anim:String = "", force:Bool = false, offset:Int = 0)
+	public function update()
+	{
+	}
+
+	public function playAnim(anim:String = "", force:Bool = false, offset:Int = 0, geo:String = "")
 	{
 		if (fullyLoaded)
 		{
-			switch (modelType)
+			if (animationSetSkeleton.animationNames.indexOf(anim) != -1)
 			{
-				case 'md2':
-					if (animationSet.animationNames.indexOf(anim) != -1)
+				if (force || currentAnim != anim)
+				{
+					var newSpeed:Float = 1.0;
+					if (animSpeed.exists(anim))
+						newSpeed = animSpeed[anim];
+					else
+						newSpeed = animSpeed["default"];
+					if (skeletonAnimator == null)
 					{
-						if (force || currentAnim != anim)
+						trace("WTF LAME");
+						return;
+					}
+
+					if (geo != "")
+					{
+						if (geos[geo] != null)
 						{
-							var newSpeed:Float = 1.0;
-							if (animSpeed.exists(anim))
-								newSpeed = animSpeed[anim];
-							else
-								newSpeed = animSpeed["default"];
-							// trace("ya new speed: " + newSpeed);
-							vertexAnimator.playbackSpeed = newSpeed;
-							vertexAnimator.play(anim, null, offset);
-							currentAnim = anim;
+							mesh.geometry = geos[geo];
+						}
+						else
+						{
+							trace("GEO NAME OF " + geo + " NOT FOUND FOR " + modelName);
 						}
 					}
-					else
-						trace("ANIMATION NAME " + anim + " NOT FOUND.");
-				case 'md5':
-					if (animationSetSkeleton.animationNames.indexOf(anim) != -1)
-					{
-						if (force || currentAnim != anim)
-						{
-							var newSpeed:Float = 1.0;
-							if (animSpeed.exists(anim))
-								newSpeed = animSpeed[anim];
-							else
-								newSpeed = animSpeed["default"];
-							skeletonAnimator.playbackSpeed = newSpeed;
-							skeletonAnimator.play(anim, stateTransition, offset);
-							currentAnim = anim;
-						}
-					}
-					else
-						trace("ANIMATION NAME " + anim + " NOT FOUND.");
-				case 'awd':
-					if (animationSetSkeleton.animationNames.indexOf(anim) != -1)
-					{
-						if (force || currentAnim != anim)
-						{
-							var newSpeed:Float = 1.0;
-							if (animSpeed.exists(anim))
-								newSpeed = animSpeed[anim];
-							else
-								newSpeed = animSpeed["default"];
-							if (skeletonAnimator == null)
-							{
-								trace("WTF LAME");
-								return;
-							}
-							skeletonAnimator.playbackSpeed = newSpeed;
-							skeletonAnimator.play(anim, stateTransition, offset);
-							currentAnim = anim;
-						}
-					}
-					else
-						trace("ANIMATION NAME " + anim + " NOT FOUND.");
+
+					skeletonAnimator.playbackSpeed = newSpeed;
+					skeletonAnimator.play(anim, stateTransition, offset);
+					currentAnim = anim;
+				}
 			}
+			// else
+			// 	trace("ANIMATION NAME " + anim + " NOT FOUND.");
 		}
 		else
 			trace("MODEL NOT FULLY LOADED. NO ANIMATION WILL PLAY.");
@@ -370,32 +313,92 @@ class ModelThing
 
 	public function destroy()
 	{
+		begoneEventListeners();
 		if (mesh != null)
+		{
+			if (mesh.geometry != null)
+				mesh.geometry.dispose();
+			mesh.geometry = null;
+			mesh.material = null;
 			mesh.disposeWithChildren();
-		if (modelBytes != null)
-			modelBytes.clear();
-		// if (modelMaterial != null)
-		// 	modelMaterial.dispose();
-		if (animationSet != null)
-			animationSet.dispose();
+		}
+		mesh = null;
+
+		for (geo in geos)
+		{
+			if (geo != null)
+				geo.dispose();
+		}
+		geos.clear();
+		geos = null;
+
 		if (animationSetSkeleton != null)
+		{
 			animationSetSkeleton.dispose();
+		}
+		animationSetSkeleton = null;
 		if (skeleton != null)
+		{
 			skeleton.dispose();
+		}
+		skeleton = null;
 		if (skeletonAnimator != null)
+		{
+			skeletonAnimator.stop();
 			skeletonAnimator.dispose();
-		if (vertexAnimator != null)
-			vertexAnimator.dispose();
+		}
+		skeletonAnimator = null;
 		stateTransition = null;
+
 		animationMap = null;
+
+		if (bitmapTexture != null)
+		{
+			if (bitmapTexture.bitmapData != null)
+			{
+				bitmapTexture.bitmapData.disposeImage();
+				bitmapTexture.bitmapData.dispose();
+			}
+			bitmapTexture.dispose();
+			bitmapTexture = null;
+		}
+		if (atfTex != null)
+		{
+			atfTex.dispose();
+		}
+		atfTex = null;
+		if (atfBytes != null)
+		{
+			atfBytes.clear();
+		}
+		atfBytes = null;
+		if (modelMaterial != null)
+		{
+			if (modelMaterial.texture != null)
+			{
+				modelMaterial.texture.dispose();
+			}
+			if (modelMaterial.ambientTexture != null)
+				modelMaterial.ambientTexture.dispose();
+			modelMaterial.texture = null;
+			modelMaterial.ambientTexture = null;
+
+			modelMaterial.dispose();
+		}
+		modelMaterial = null;
+		modelView = null;
+		if (noLoopList != null)
+			noLoopList.resize(0);
+		noLoopList = null;
+		animSpeed.clear();
+		animSpeed = null;
+		System.gc();
 	}
 
 	public function begoneEventListeners()
 	{
-		Asset3DLibrary.removeEventListener(Asset3DEvent.ASSET_COMPLETE, onAssetComplete);
-		Asset3DLibrary.removeEventListener(LoaderEvent.RESOURCE_COMPLETE, onResourceComplete);
-		Asset3DLibrary.removeEventListener(Asset3DEvent.ASSET_COMPLETE, onAssetCompleteMD5);
-		Asset3DLibrary.removeEventListener(LoaderEvent.RESOURCE_COMPLETE, onResourceCompleteMD5);
+		trace("DEAD");
+		// Asset3DLibrary.stopLoad();
 		Asset3DLibrary.removeEventListener(Asset3DEvent.ASSET_COMPLETE, onAssetCompleteAWD);
 		Asset3DLibrary.removeEventListener(LoaderEvent.RESOURCE_COMPLETE, onResourceCompleteAWD);
 	}
@@ -413,5 +416,12 @@ class ModelThing
 	public function addRoll(angle:Float)
 	{
 		mesh.roll(angle);
+	}
+
+	public function get_currentTime()
+	{
+		if (skeletonAnimator == null)
+			return 0;
+		return skeletonAnimator.time;
 	}
 }
